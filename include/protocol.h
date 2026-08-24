@@ -1,0 +1,34 @@
+#ifndef PROTOCOL_H
+#define PROTOCOL_H
+
+#include <string>
+#include <vector>
+
+namespace p2p {
+
+// Command types
+constexpr const char* CMD_CONNECT = "CONNECT";
+constexpr const char* CMD_LIST = "LIST";
+constexpr const char* CMD_UPLOAD = "UPLOAD";
+constexpr const char* CMD_DOWNLOAD = "DOWNLOAD";
+constexpr const char* CMD_DISCONNECT = "DISCONNECT";
+
+// Response codes
+constexpr const char* RESP_OK = "OK";
+constexpr const char* RESP_ERROR = "ERROR";
+constexpr const char* RESP_READY = "READY";
+
+// Buffer sizes
+constexpr size_t BUFFER_SIZE = 4096;
+constexpr size_t MAX_MESSAGE_SIZE = 65536;
+
+class Protocol {
+public:
+    static std::vector<std::string> parseCommand(const std::string& command);
+    static std::string formatResponse(const std::string& status, const std::string& data);
+    static std::string formatFileList(const std::vector<std::string>& files);
+};
+
+} // namespace p2p
+
+#endif // PROTOCOL_H
