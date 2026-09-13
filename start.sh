@@ -42,14 +42,13 @@ if [ ! -f "build/p2p_server" ] && [ ! -f "build/p2p_server.exe" ]; then
 fi
 
 echo "Step 1: Starting TCP Server (C++)..."
-cd build
-if [ -f "p2p_server.exe" ]; then
-    ./p2p_server.exe &
+# Run from the repo root so relative uploads/certs paths resolve correctly.
+if [ -f "build/p2p_server.exe" ]; then
+    ./build/p2p_server.exe &
 else
-    ./p2p_server &
+    ./build/p2p_server &
 fi
 TCP_PID=$!
-cd ..
 sleep 2
 
 echo "Step 2: Starting Web Server (Python)..."

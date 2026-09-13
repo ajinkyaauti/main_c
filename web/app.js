@@ -3,16 +3,25 @@ class P2PClient {
     constructor() {
         this.serverUrl = 'http://localhost:5000';
         this.connected = false;
+        this.authenticated = false;
+        this.username = '';
         this.peerId = '';
         this.myFiles = [];
         
         this.initElements();
         this.initEventListeners();
         this.loadPeerId();
+        this.restoreSession();
     }
     
     initElements() {
         this.elements = {
+            username: document.getElementById('username'),
+            password: document.getElementById('password'),
+            loginBtn: document.getElementById('loginBtn'),
+            registerBtn: document.getElementById('registerBtn'),
+            logoutBtn: document.getElementById('logoutBtn'),
+            authStatus: document.getElementById('authStatus'),
             peerId: document.getElementById('peerId'),
             serverAddress: document.getElementById('serverAddress'),
             connectBtn: document.getElementById('connectBtn'),
@@ -33,6 +42,10 @@ class P2PClient {
     }
     
     initEventListeners() {
+        this.elements.loginBtn.addEventListener('click', () => this.login());
+        this.elements.registerBtn.addEventListener('click', () => this.register());
+        this.elements.logoutBtn.addEventListener('click', () => this.logout());
+
         // Connection
         this.elements.connectBtn.addEventListener('click', () => this.connect());
         this.elements.disconnectBtn.addEventListener('click', () => this.disconnect());
@@ -68,8 +81,100 @@ class P2PClient {
             this.elements.peerId.value = 'peer_' + Math.random().toString(36).substr(2, 9);
         }
     }
+
+    async request(path, options = {}) {
+        const response = await fetch(`${this.serverUrl}${path}`, {
+            credentials: 'same-origin',
+            ...options
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data.message || 'Request failed');
+        }
+        return data;
+    }
+
+    async restoreSession() {
+        try {
+            const data = await this.request('/api/me');
+            this.setAuthenticatedUser(data.username);
+            this.log(`Signed in as ${data.username}`, 'success');
+        } catch (error) {
+            this.setAuthenticatedUser('');
+        }
+    }
+
+    setAuthenticatedUser(username) {
+        this.username = username;
+        this.authenticated = Boolean(username);
+        this.elements.authStatus.textContent = this.authenticated
+            ? `Signed in as ${username}`
+            : 'Not authenticated';
+        this.elements.loginBtn.disabled = this.authenticated;
+        this.elements.registerBtn.disabled = this.authenticated;
+        this.elements.logoutBtn.disabled = !this.authenticated;
+        this.elements.peerId.disabled = !this.authenticated || this.connected;
+        this.elements.connectBtn.disabled = !this.authenticated || this.connected;
+        this.elements.uploadBtn.disabled = !this.authenticated || !this.connected;
+        this.elements.refreshBtn.disabled = !this.authenticated || !this.connected;
+    }
+
+    async login() {
+        try {
+            const data = await this.request('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    username: this.elements.username.value,
+                    password: this.elements.password.value
+                })
+            });
+            this.setAuthenticatedUser(data.username);
+            this.elements.password.value = '';
+            this.log(`Signed in as ${data.username}`, 'success');
+        } catch (error) {
+            this.log(`Login failed: ${error.message}`, 'error');
+        }
+    }
+
+    async register() {
+        try {
+            await this.request('/api/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    username: this.elements.username.value,
+                    password: this.elements.password.value
+                })
+            });
+            this.log('Registration complete. You can now log in.', 'success');
+        } catch (error) {
+            this.log(`Registration failed: ${error.message}`, 'error');
+        }
+    }
+
+    async logout() {
+        if (this.connected) {
+            await this.disconnect();
+        }
+
+        try {
+            await this.request('/api/logout', { method: 'POST' });
+        } catch (error) {
+            this.log(`Logout failed: ${error.message}`, 'error');
+            return;
+        }
+
+        this.setAuthenticatedUser('');
+        this.log('Signed out', 'info');
+    }
     
     async connect() {
+        if (!this.authenticated) {
+            this.log('Sign in before connecting a peer', 'warning');
+            return;
+        }
+
         const peerId = this.elements.peerId.value.trim();
         const serverAddr = this.elements.serverAddress.value.trim();
         
@@ -85,6 +190,7 @@ class P2PClient {
             const response = await fetch(`${this.serverUrl}/api/connect`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
                 body: JSON.stringify({ peer_id: peerId })
             });
             
@@ -109,6 +215,7 @@ class P2PClient {
             await fetch(`${this.serverUrl}/api/disconnect`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
                 body: JSON.stringify({ peer_id: this.peerId })
             });
         } catch (error) {
@@ -133,11 +240,11 @@ class P2PClient {
         } else {
             this.elements.statusDot.classList.remove('connected');
             this.elements.statusText.textContent = 'Disconnected';
-            this.elements.connectBtn.disabled = false;
+            this.elements.connectBtn.disabled = !this.authenticated;
             this.elements.disconnectBtn.disabled = true;
-            this.elements.uploadBtn.disabled = true;
-            this.elements.refreshBtn.disabled = true;
-            this.elements.peerId.disabled = false;
+            this.elements.uploadBtn.disabled = !this.authenticated;
+            this.elements.refreshBtn.disabled = !this.authenticated;
+            this.elements.peerId.disabled = !this.authenticated;
             this.elements.serverAddress.disabled = false;
         }
     }
@@ -189,6 +296,7 @@ class P2PClient {
                     });
                     xhr.addEventListener('error', () => reject(new Error('Upload error')));
                     xhr.open('POST', `${this.serverUrl}/api/upload`);
+                    xhr.withCredentials = true;
                     xhr.send(formData);
                 });
                 
@@ -223,7 +331,9 @@ class P2PClient {
         if (!this.connected) return;
         
         try {
-            const response = await fetch(`${this.serverUrl}/api/list`);
+            const response = await fetch(`${this.serverUrl}/api/list`, {
+                credentials: 'same-origin'
+            });
             const data = await response.json();
             
             if (data.status === 'success') {

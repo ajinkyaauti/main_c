@@ -6,22 +6,9 @@
 #include <map>
 #include <mutex>
 #include <memory>
+#include <functional>
 
-#ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#pragma comment(lib, "ws2_32.lib")
-typedef SOCKET socket_t;
-#else
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-typedef int socket_t;
-#define INVALID_SOCKET -1
-#define SOCKET_ERROR -1
-#define closesocket close
-#endif
+#include "net_compat.h"
 
 namespace p2p {
 
@@ -31,6 +18,7 @@ struct ClientInfo {
     int port;
     socket_t socket;
     std::vector<std::string> files;
+    std::map<std::string, bool> fileVisibility;
 };
 
 class Server {
@@ -41,17 +29,23 @@ public:
     bool start();
     void stop();
     void run();
-    
+
+    // Lets DOWNLOAD responses include a peer transfer port and an issued
+    // token, obtained from the peer file server that actually holds the bytes.
+    void setTransferInfo(int transferPort,
+                         std::function<std::string(const std::string&)> tokenIssuer);
+
 private:
     void handleClient(socket_t clientSocket);
     void processCommand(socket_t clientSocket, const std::string& command);
     void sendResponse(socket_t clientSocket, const std::string& response);
-    std::string receiveData(socket_t clientSocket);
     
     void handleConnect(socket_t clientSocket, const std::string& peerId);
     void handleList(socket_t clientSocket);
     void handleUpload(socket_t clientSocket, const std::string& filename, size_t filesize);
     void handleDownload(socket_t clientSocket, const std::string& filename);
+    void handleDelete(socket_t clientSocket, const std::string& filename);
+    void handleVisibility(socket_t clientSocket, const std::string& filename, bool isPublic);
     void handleDisconnect(socket_t clientSocket);
     
     int port_;
@@ -59,7 +53,9 @@ private:
     bool running_;
     std::map<socket_t, ClientInfo> clients_;
     std::mutex clientsMutex_;
-    
+    int transferPort_;
+    std::function<std::string(const std::string&)> tokenIssuer_;
+
     bool initializeWinsock();
     void cleanupWinsock();
 };

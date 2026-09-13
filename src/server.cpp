@@ -3,12 +3,13 @@
 #include <iostream>
 #include <thread>
 #include <cstring>
+#include <algorithm>
 #include <sstream>
 
 namespace p2p {
 
 Server::Server(int port) 
-    : port_(port), serverSocket_(INVALID_SOCKET), running_(false) {
+    : port_(port), serverSocket_(INVALID_SOCKET), running_(false), transferPort_(0) {
 }
 
 Server::~Server() {
@@ -99,6 +100,13 @@ void Server::stop() {
     std::cout << "Server stopped" << std::endl;
 }
 
+void Server::setTransferInfo(int transferPort,
+                              std::function<std::string(const std::string&)> tokenIssuer) {
+    transferPort_ = transferPort;
+    tokenIssuer_ = std::move(tokenIssuer);
+}
+
+
 void Server::run() {
     while (running_) {
         sockaddr_in clientAddr;
@@ -133,14 +141,27 @@ void Server::run() {
 }
 
 void Server::handleClient(socket_t clientSocket) {
+    std::string pendingData;
+    char buffer[BUFFER_SIZE];
+
     try {
         while (running_) {
-            std::string data = receiveData(clientSocket);
-            if (data.empty()) {
+            const int bytesReceived = recv(clientSocket, buffer, sizeof(buffer), 0);
+            if (bytesReceived <= 0) {
                 break; // Client disconnected
             }
-            
-            processCommand(clientSocket, data);
+
+            pendingData.append(buffer, static_cast<size_t>(bytesReceived));
+            if (pendingData.size() > MAX_MESSAGE_SIZE) {
+                sendResponse(clientSocket, Protocol::formatResponse(
+                    RESP_ERROR, "Message too large"));
+                break;
+            }
+
+            std::string command;
+            while (Protocol::extractCommand(pendingData, command)) {
+                processCommand(clientSocket, command);
+            }
         }
     } catch (const std::exception& e) {
         std::cerr << "Error handling client: " << e.what() << std::endl;
@@ -150,20 +171,19 @@ void Server::handleClient(socket_t clientSocket) {
     closesocket(clientSocket);
 }
 
-std::string Server::receiveData(socket_t clientSocket) {
-    char buffer[BUFFER_SIZE];
-    int bytesReceived = recv(clientSocket, buffer, BUFFER_SIZE - 1, 0);
-    
-    if (bytesReceived <= 0) {
-        return "";
-    }
-    
-    buffer[bytesReceived] = '\0';
-    return std::string(buffer);
-}
-
 void Server::sendResponse(socket_t clientSocket, const std::string& response) {
-    send(clientSocket, response.c_str(), response.length(), 0);
+    size_t bytesSent = 0;
+    while (bytesSent < response.size()) {
+        const size_t remaining = response.size() - bytesSent;
+        const int chunkSize = static_cast<int>(std::min<size_t>(remaining, 64 * 1024));
+        const int result = send(clientSocket, response.data() + bytesSent, chunkSize, 0);
+        if (result <= 0) {
+            std::cerr << "Failed to send response" << std::endl;
+            return;
+        }
+
+        bytesSent += static_cast<size_t>(result);
+    }
 }
 
 void Server::processCommand(socket_t clientSocket, const std::string& command) {
@@ -176,17 +196,49 @@ void Server::processCommand(socket_t clientSocket, const std::string& command) {
     
     const std::string& cmd = tokens[0];
     
-    if (cmd == CMD_CONNECT && tokens.size() >= 2) {
+    if (cmd == CMD_CONNECT && tokens.size() == 2) {
+        if (!Protocol::isSafePeerId(tokens[1])) {
+            sendResponse(clientSocket, Protocol::formatResponse(RESP_ERROR, "Invalid peer ID"));
+            return;
+        }
         handleConnect(clientSocket, tokens[1]);
-    } else if (cmd == CMD_LIST) {
+    } else if (cmd == CMD_LIST && tokens.size() == 1) {
         handleList(clientSocket);
-    } else if (cmd == CMD_UPLOAD && tokens.size() >= 3) {
-        size_t filesize = std::stoull(tokens[2]);
+    } else if (cmd == CMD_UPLOAD && tokens.size() == 3) {
+        size_t filesize = 0;
+        if (!Protocol::isSafeFilename(tokens[1]) ||
+            !Protocol::parseFileSize(tokens[2], filesize)) {
+            sendResponse(clientSocket, Protocol::formatResponse(RESP_ERROR,
+                "Invalid upload arguments"));
+            return;
+        }
         handleUpload(clientSocket, tokens[1], filesize);
-    } else if (cmd == CMD_DOWNLOAD && tokens.size() >= 2) {
+    } else if (cmd == CMD_DOWNLOAD && tokens.size() == 2) {
+        if (!Protocol::isSafeFilename(tokens[1])) {
+            sendResponse(clientSocket, Protocol::formatResponse(RESP_ERROR, "Invalid filename"));
+            return;
+        }
         handleDownload(clientSocket, tokens[1]);
-    } else if (cmd == CMD_DISCONNECT) {
+    } else if ((cmd == CMD_DELETE || cmd == CMD_PUBLIC || cmd == CMD_PRIVATE) &&
+               tokens.size() == 2) {
+        if (!Protocol::isSafeFilename(tokens[1])) {
+            sendResponse(clientSocket, Protocol::formatResponse(RESP_ERROR, "Invalid filename"));
+            return;
+        }
+        if (cmd == CMD_DELETE) {
+            handleDelete(clientSocket, tokens[1]);
+        } else {
+            handleVisibility(clientSocket, tokens[1], cmd == CMD_PUBLIC);
+        }
+    } else if (cmd == CMD_DISCONNECT && tokens.size() == 1) {
         handleDisconnect(clientSocket);
+    } else if (cmd == CMD_LIST ||
+               (cmd == CMD_CONNECT && tokens.size() != 2) ||
+               (cmd == CMD_UPLOAD && tokens.size() != 3) ||
+               (cmd == CMD_DOWNLOAD && tokens.size() != 2) ||
+               ((cmd == CMD_DELETE || cmd == CMD_PUBLIC || cmd == CMD_PRIVATE) &&
+                tokens.size() != 2) || (cmd == CMD_DISCONNECT && tokens.size() != 1)) {
+        sendResponse(clientSocket, Protocol::formatResponse(RESP_ERROR, "Invalid command arguments"));
     } else {
         sendResponse(clientSocket, Protocol::formatResponse(RESP_ERROR, "Unknown command"));
     }
@@ -210,7 +262,10 @@ void Server::handleList(socket_t clientSocket) {
     std::vector<std::string> allFiles;
     for (const auto& [socket, client] : clients_) {
         for (const auto& file : client.files) {
-            allFiles.push_back(client.id + ":" + file);
+            const auto visibility = client.fileVisibility.find(file);
+            if (visibility != client.fileVisibility.end() && visibility->second) {
+                allFiles.push_back(client.id + ":" + file);
+            }
         }
     }
     
@@ -224,6 +279,7 @@ void Server::handleUpload(socket_t clientSocket, const std::string& filename, si
     auto it = clients_.find(clientSocket);
     if (it != clients_.end()) {
         it->second.files.push_back(filename);
+        it->second.fileVisibility[filename] = true;
         std::cout << "Client " << it->second.id << " uploaded: " << filename 
                   << " (" << filesize << " bytes)" << std::endl;
         sendResponse(clientSocket, Protocol::formatResponse(RESP_OK, "Upload registered"));
@@ -238,15 +294,59 @@ void Server::handleDownload(socket_t clientSocket, const std::string& filename) 
     // Find the file owner
     for (const auto& [socket, client] : clients_) {
         for (const auto& file : client.files) {
-            if (file == filename) {
-                sendResponse(clientSocket, Protocol::formatResponse(RESP_OK, 
-                    "File found: " + client.id));
+            const auto visibility = client.fileVisibility.find(file);
+            if (file == filename && visibility != client.fileVisibility.end() && visibility->second) {
+                if (tokenIssuer_) {
+                    const std::string token = tokenIssuer_(filename);
+                    sendResponse(clientSocket, Protocol::formatResponse(RESP_OK,
+                        client.id + " " + std::to_string(transferPort_) + " " + token));
+                } else {
+                    sendResponse(clientSocket, Protocol::formatResponse(RESP_OK,
+                        "File found: " + client.id));
+                }
                 return;
             }
         }
     }
     
     sendResponse(clientSocket, Protocol::formatResponse(RESP_ERROR, "File not found"));
+}
+
+void Server::handleDelete(socket_t clientSocket, const std::string& filename) {
+    std::lock_guard<std::mutex> lock(clientsMutex_);
+    auto client = clients_.find(clientSocket);
+    if (client == clients_.end()) {
+        sendResponse(clientSocket, Protocol::formatResponse(RESP_ERROR, "Not connected"));
+        return;
+    }
+
+    auto file = std::find(client->second.files.begin(), client->second.files.end(), filename);
+    if (file == client->second.files.end()) {
+        sendResponse(clientSocket, Protocol::formatResponse(RESP_ERROR, "File not found"));
+        return;
+    }
+
+    client->second.files.erase(file);
+    client->second.fileVisibility.erase(filename);
+    sendResponse(clientSocket, Protocol::formatResponse(RESP_OK, "File deleted"));
+}
+
+void Server::handleVisibility(socket_t clientSocket, const std::string& filename, bool isPublic) {
+    std::lock_guard<std::mutex> lock(clientsMutex_);
+    auto client = clients_.find(clientSocket);
+    if (client == clients_.end()) {
+        sendResponse(clientSocket, Protocol::formatResponse(RESP_ERROR, "Not connected"));
+        return;
+    }
+
+    if (client->second.fileVisibility.find(filename) == client->second.fileVisibility.end()) {
+        sendResponse(clientSocket, Protocol::formatResponse(RESP_ERROR, "File not found"));
+        return;
+    }
+
+    client->second.fileVisibility[filename] = isPublic;
+    sendResponse(clientSocket, Protocol::formatResponse(RESP_OK,
+        isPublic ? "File is public" : "File is private"));
 }
 
 void Server::handleDisconnect(socket_t clientSocket) {

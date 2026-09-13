@@ -87,6 +87,9 @@ instance/
 uploads/
 temp/
 
+# TLS certificates/keys generated at runtime
+certs/
+
 # Database files (if you add SQLite later)
 *.db
 *.sqlite
@@ -95,3 +98,15 @@ temp/
 # Environment variables
 .env
 .env.local
+PLAN.md
+/tests
+changes.md
+UPGRADATION_PLAN.md
+/build
+/build/
+/build/CMakeFiles/
+
+build/.ninja_deps
+build/.ninja_log
+build/build.ninja
+build/CMakeCache.txt
