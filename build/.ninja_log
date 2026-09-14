@@ -1,5 +1,0 @@
-# ninja log v7
-76	2476	8069513024031078	CMakeFiles/p2p_server.dir/src/protocol.cpp.obj	89d9c8588c0ab266
-159	5834	8069513024845287	CMakeFiles/p2p_server.dir/src/main_server.cpp.obj	98512c45262c337
-3	6596	8069513023176151	CMakeFiles/p2p_server.dir/src/server.cpp.obj	53bd89d7c53b4973
-6598	7575	8069513089252957	p2p_server.exe	1656a1610a4d29e0
