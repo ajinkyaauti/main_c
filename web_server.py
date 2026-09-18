@@ -647,14 +647,17 @@ def status():
 
 
 if __name__ == '__main__':
+    web_host = os.environ.get('P2P_WEB_HOST', '0.0.0.0')
+    web_port = int(os.environ.get('P2P_WEB_PORT', 5000))
+
     print("=" * 50)
     print("P2P File Transfer Web Server")
     print("=" * 50)
-    print(f"Web Interface: http://localhost:5000")
+    print(f"Web Interface: http://localhost:{web_port}")
     print(f"TCP Server: {TCP_SERVER_HOST}:{TCP_SERVER_PORT}")
     print(f"Upload Folder: {os.path.abspath(UPLOAD_FOLDER)}")
     print("=" * 50)
     print("\nMake sure the TCP server is running on port 8080!")
     print("Starting web server...\n")
     
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host=web_host, port=web_port, debug=True)

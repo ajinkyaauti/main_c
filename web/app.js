@@ -1,7 +1,7 @@
 // P2P File Transfer Web Client
 class P2PClient {
     constructor() {
-        this.serverUrl = 'http://localhost:5000';
+        this.serverUrl = window.location.origin;
         this.connected = false;
         this.authenticated = false;
         this.username = '';
@@ -117,6 +117,17 @@ class P2PClient {
         this.elements.connectBtn.disabled = !this.authenticated || this.connected;
         this.elements.uploadBtn.disabled = !this.authenticated || !this.connected;
         this.elements.refreshBtn.disabled = !this.authenticated || !this.connected;
+        this.setLockedTabs(!this.authenticated);
+    }
+
+    setLockedTabs(locked) {
+        document.querySelectorAll('.tab-btn[data-tab="upload"], .tab-btn[data-tab="files"]').forEach(btn => {
+            btn.disabled = locked;
+            btn.title = locked ? 'Sign in first' : '';
+        });
+        if (locked) {
+            document.querySelector('.tab-btn[data-tab="setup"]').click();
+        }
     }
 
     async login() {
@@ -133,6 +144,7 @@ class P2PClient {
             this.elements.password.value = '';
             this.log(`Signed in as ${data.username}`, 'success');
         } catch (error) {
+            this.elements.authStatus.textContent = `Login failed: ${error.message}`;
             this.log(`Login failed: ${error.message}`, 'error');
         }
     }
@@ -147,8 +159,10 @@ class P2PClient {
                     password: this.elements.password.value
                 })
             });
+            this.elements.authStatus.textContent = 'Registration complete. You can now log in.';
             this.log('Registration complete. You can now log in.', 'success');
         } catch (error) {
+            this.elements.authStatus.textContent = `Registration failed: ${error.message}`;
             this.log(`Registration failed: ${error.message}`, 'error');
         }
     }
@@ -408,6 +422,9 @@ class P2PClient {
     }
     
     log(message, type = 'info') {
+        console.log(`[${type}] ${message}`);
+        if (!this.elements.activityLog) return;
+
         const timestamp = new Date().toLocaleTimeString();
         const logEntry = document.createElement('div');
         logEntry.className = `log-entry ${type}`;
@@ -424,3 +441,15 @@ class P2PClient {
 
 // Initialize the client
 const client = new P2PClient();
+
+// Simple tab switching
+document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        if (btn.disabled) return;
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById(`tab-${btn.dataset.tab}`).classList.add('active');
+    });
+});
+client.setLockedTabs(!client.authenticated);
