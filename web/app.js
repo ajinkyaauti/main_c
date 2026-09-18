@@ -1,7 +1,7 @@
 // P2P File Transfer Web Client
 class P2PClient {
     constructor() {
-        this.serverUrl = 'http://localhost:5000';
+        this.serverUrl = window.location.origin;
         this.connected = false;
         this.authenticated = false;
         this.username = '';
